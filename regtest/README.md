@@ -96,6 +96,37 @@ This will:
   -input "300:start,350:start:release,500:cross,550:cross:release" game.cue
 ```
 
+**Run Crash Bandicoot 3 test (skip intros, jump & spin in Warp Room):**
+```bash
+INPUT=$(grep -v '^#' regtest/crash3_warp_room_test.txt | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+./build/bin/duckstation-regtest -console -frames 4000 \
+  -dumpdir /tmp/crash_test -dumpinterval 25 \
+  -input "$INPUT" /path/to/Crash\ Bandicoot\ 3.cue
+```
+
+## Input File Format
+
+You can store inputs in a text file for easier editing. See `crash3_warp_room_test.txt` for an example.
+
+**Format:**
+```
+# Comments start with #
+frame:button
+frame:button:release
+```
+
+**Action Durations (at 50fps PAL):**
+- Button tap: ~40-50 frames (hold for ~1 second)
+- Jump animation: ~60 frames (~1.2 seconds)
+- Spin animation: ~40 frames (~0.8 seconds)
+- Menu transition: ~300 frames (~6 seconds)
+
+**To convert file to command-line format:**
+```bash
+INPUT=$(grep -v '^#' input_file.txt | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+./build/bin/duckstation-regtest -input "$INPUT" game.cue
+```
+
 ## Environment Variables
 
 | Variable | Description |
