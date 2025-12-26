@@ -44,6 +44,7 @@
 
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 
 LOG_CHANNEL(Host);
@@ -146,6 +147,15 @@ bool RegTestHost::InitializeConfig()
     si.SetBoolValue("InputSources", InputManager::InputSourceToString(static_cast<InputSourceType>(i)), false);
 
   EmuFolders::LoadConfig(s_base_settings_interface);
+  
+  // Override BIOS directory if DUCKSTATION_BIOS_DIR environment variable is set
+  const char* bios_dir_env = std::getenv("DUCKSTATION_BIOS_DIR");
+  if (bios_dir_env && bios_dir_env[0] != '\0')
+  {
+    EmuFolders::Bios = Path::Canonicalize(bios_dir_env);
+    DEV_LOG("BIOS Directory overridden from DUCKSTATION_BIOS_DIR to: {}", EmuFolders::Bios);
+  }
+  
   EmuFolders::EnsureFoldersExist();
 
   return true;
