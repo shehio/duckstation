@@ -89,6 +89,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <map>
+#include <sstream>
 #include <thread>
 
 LOG_CHANNEL(System);
@@ -106,6 +108,9 @@ LOG_CHANNEL(System);
 #endif
 
 // #define PROFILE_MEMORY_SAVE_STATES 1
+
+// Forward declaration for training data collection (defined later, used in FrameDone)
+static void ProcessTrainingDataCollection();
 
 SystemBootParameters::SystemBootParameters() = default;
 
@@ -2177,6 +2182,9 @@ void System::Execute()
 
 void System::FrameDone()
 {
+  // Process training data collection for AI/ML
+  ProcessTrainingDataCollection();
+
   // Generate any pending samples from the SPU before sleeping, this way we reduce the chances of underruns.
   // TODO: when running ahead, we can skip this (and the flush above)
   if (!IsReplayingGPUDump()) [[likely]]
@@ -4096,6 +4104,376 @@ bool System::DumpSPURAM(std::string path, Error* error)
   }
 
   return FileSystem::WriteAtomicRenamedFile(std::move(path), SPU::GetRAM(), error);
+}
+
+// Training data collection variables (declared early so UpdateTrainingButtonState can be used below)
+namespace {
+static bool s_collecting_training_data = false;
+static std::string s_training_data_dir;
+static u32 s_training_frame_interval = 1;
+static u32 s_training_frame_count = 0;
+static std::vector<std::string> s_training_labels;
+static std::array<float, 16> s_current_button_states = {};
+
+// Memory watch list for training - specific addresses to extract instead of full RAM
+struct MemoryWatch
+{
+  std::string name;
+  u32 address;       // PS1 address (0x80xxxxxx format, will be converted to RAM offset)
+  u8 size;           // 1, 2, or 4 bytes
+};
+static std::vector<MemoryWatch> s_training_memory_watches;
+
+static void UpdateTrainingButtonState(u32 button_index, float value)
+{
+  if (button_index < s_current_button_states.size())
+    s_current_button_states[button_index] = value;
+}
+
+// Read memory value at PS1 address
+static u32 ReadMemoryForTraining(u32 ps1_address, u8 size)
+{
+  // Convert PS1 address (0x80xxxxxx) to RAM offset
+  u32 offset = ps1_address & 0x1FFFFF; // Mask to 2MB
+  if (offset + size > Bus::g_ram_size)
+    return 0;
+
+  const u8* ram = Bus::g_unprotected_ram;
+  switch (size)
+  {
+    case 1:
+      return ram[offset];
+    case 2:
+      return ram[offset] | (ram[offset + 1] << 8);
+    case 4:
+      return ram[offset] | (ram[offset + 1] << 8) | (ram[offset + 2] << 16) | (ram[offset + 3] << 24);
+    default:
+      return 0;
+  }
+}
+} // namespace
+
+// Input recording for behavioral cloning
+namespace {
+struct RecordedInput
+{
+  u32 frame;
+  u32 controller_index;
+  u32 button_index;
+  float value;
+};
+static std::vector<RecordedInput> s_recorded_inputs;
+static bool s_recording_input = false;
+static std::map<std::pair<u32, u32>, float> s_last_input_state; // Track last state to avoid duplicates
+} // namespace
+
+bool System::IsRecordingInput()
+{
+  return s_recording_input;
+}
+
+void System::StartInputRecording()
+{
+  if (!IsValid())
+    return;
+
+  s_recorded_inputs.clear();
+  s_last_input_state.clear();
+  s_recording_input = true;
+  Host::AddOSDMessage(OSDMessageType::Info, "Input recording started");
+  INFO_LOG("Input recording started at frame {}", GetFrameNumber());
+}
+
+void System::StopInputRecording()
+{
+  if (!s_recording_input)
+    return;
+
+  s_recording_input = false;
+  Host::AddOSDMessage(OSDMessageType::Info,
+    fmt::format("Input recording stopped. {} inputs recorded.", s_recorded_inputs.size()));
+  INFO_LOG("Input recording stopped. {} inputs recorded.", s_recorded_inputs.size());
+}
+
+void System::RecordControllerInput(u32 controller_index, u32 button_index, float value)
+{
+  // Update training data button state (for controller 0 only)
+  if (controller_index == 0 && button_index < 16)
+    UpdateTrainingButtonState(button_index, value);
+
+  if (!s_recording_input || !IsValid())
+    return;
+
+  // Only record state changes (avoid flooding with unchanged states)
+  auto key = std::make_pair(controller_index, button_index);
+  auto it = s_last_input_state.find(key);
+  if (it != s_last_input_state.end() && std::abs(it->second - value) < 0.01f)
+    return; // No significant change
+
+  s_last_input_state[key] = value;
+
+  RecordedInput input;
+  input.frame = GetFrameNumber();
+  input.controller_index = controller_index;
+  input.button_index = button_index;
+  input.value = value;
+  s_recorded_inputs.push_back(input);
+
+  DEV_LOG("Recorded input: frame={}, controller={}, button={}, value={:.2f}",
+          input.frame, controller_index, button_index, value);
+}
+
+bool System::SaveInputRecording(const std::string& path, Error* error)
+{
+  std::string data = GetInputRecordingAsRegtestFormat();
+  if (data.empty())
+  {
+    Error::SetStringView(error, "No inputs recorded.");
+    return false;
+  }
+
+  return FileSystem::WriteStringToFile(path.c_str(), data, error);
+}
+
+std::string System::GetInputRecordingAsRegtestFormat()
+{
+  if (s_recorded_inputs.empty())
+    return {};
+
+  // Button index to name mapping (inverse of regtest)
+  static const char* button_names[] = {
+    "select", "l3", "r3", "start",
+    "up", "right", "down", "left",
+    "l2", "r2", "l1", "r1",
+    "triangle", "circle", "cross", "square"
+  };
+
+  std::string result;
+  for (const auto& input : s_recorded_inputs)
+  {
+    if (!result.empty())
+      result += ",";
+
+    const char* button_name = (input.button_index < 16) ? button_names[input.button_index] : "unknown";
+    const char* action = (input.value > 0.5f) ? "" : ":release";
+
+    result += fmt::format("{}:{}{}", input.frame, button_name, action);
+  }
+
+  return result;
+}
+
+void System::ClearInputRecording()
+{
+  s_recorded_inputs.clear();
+  s_last_input_state.clear();
+  s_recording_input = false;
+}
+
+// Training data collection helper function (forward declared at top, variables in namespace above)
+static void ProcessTrainingDataCollection()
+{
+  if (!s_collecting_training_data)
+    return;
+
+  const u32 current_frame = System::GetFrameNumber();
+  if (current_frame % s_training_frame_interval != 0)
+    return;
+
+  // Save frame as PNG
+  const std::string frame_filename = fmt::format("frame_{:08d}.png", current_frame);
+  const std::string frame_filepath = Path::Combine(s_training_data_dir, frame_filename);
+  GPUBackend::RenderScreenshotToFile(frame_filepath.c_str(), DisplayScreenshotMode::InternalResolution, 85, false);
+
+  // Build CSV row: frame number and frame file
+  std::string row = fmt::format("{},{}", current_frame, frame_filename);
+
+  // Add memory watch values (much smaller than 2MB RAM dump!)
+  for (const auto& watch : s_training_memory_watches)
+  {
+    u32 value = ReadMemoryForTraining(watch.address, watch.size);
+    row += fmt::format(",{}", value);
+  }
+
+  // Add button states
+  for (size_t i = 0; i < 16; i++)
+  {
+    row += fmt::format(",{}", s_current_button_states[i] > 0.5f ? 1 : 0);
+  }
+
+  s_training_labels.push_back(row);
+  s_training_frame_count++;
+
+  if (s_training_frame_count % 100 == 0)
+    DEV_LOG("Training data: {} frames collected", s_training_frame_count);
+}
+
+bool System::IsCollectingTrainingData()
+{
+  return s_collecting_training_data;
+}
+
+void System::StartTrainingDataCollection(const std::string& output_dir, u32 frame_interval)
+{
+  if (!IsValid())
+    return;
+
+  s_training_data_dir = output_dir;
+  s_training_frame_interval = (frame_interval > 0) ? frame_interval : 1;
+  s_training_frame_count = 0;
+  s_training_labels.clear();
+  s_current_button_states.fill(0.0f);
+
+  // Only set up default memory watches if none were pre-configured
+  // (allows user to call AddTrainingMemoryWatch() before StartTrainingDataCollection())
+  if (s_training_memory_watches.empty())
+  {
+    // Generic: Sample a few RAM locations that often contain useful state
+    s_training_memory_watches.push_back({"mem_6f00", 0x80066F00, 4});
+    s_training_memory_watches.push_back({"mem_6f04", 0x80066F04, 4});
+    s_training_memory_watches.push_back({"mem_6f08", 0x80066F08, 4});
+    s_training_memory_watches.push_back({"mem_6f0c", 0x80066F0C, 4});
+    s_training_memory_watches.push_back({"mem_8f00", 0x80068F00, 4});
+    s_training_memory_watches.push_back({"mem_8f04", 0x80068F04, 4});
+    s_training_memory_watches.push_back({"mem_8f08", 0x80068F08, 4});
+    s_training_memory_watches.push_back({"mem_8f0c", 0x80068F0C, 4});
+    INFO_LOG("Using default memory watches ({} addresses)", s_training_memory_watches.size());
+  }
+  else
+  {
+    INFO_LOG("Using pre-configured memory watches ({} addresses)", s_training_memory_watches.size());
+  }
+
+  // Create output directory
+  if (!FileSystem::EnsureDirectoryExists(output_dir.c_str(), false))
+  {
+    Host::AddOSDMessage(OSDMessageType::Error, fmt::format("Failed to create directory: {}", output_dir));
+    return;
+  }
+
+  // Build CSV header dynamically
+  std::string header = "frame,frame_file";
+  for (const auto& watch : s_training_memory_watches)
+  {
+    header += "," + watch.name;
+  }
+  header += ",select,l3,r3,start,up,right,down,left,l2,r2,l1,r1,triangle,circle,cross,square";
+  s_training_labels.push_back(header);
+
+  s_collecting_training_data = true;
+  Host::AddOSDMessage(OSDMessageType::Info, fmt::format("Training data collection started: {}", output_dir));
+  INFO_LOG("Training data collection started: dir={}, interval={}", output_dir, frame_interval);
+}
+
+void System::StopTrainingDataCollection()
+{
+  if (!s_collecting_training_data)
+    return;
+
+  s_collecting_training_data = false;
+
+  // Write labels CSV file
+  const std::string csv_path = Path::Combine(s_training_data_dir, "labels.csv");
+  std::string csv_content;
+  for (const auto& line : s_training_labels)
+  {
+    csv_content += line + "\n";
+  }
+
+  Error error;
+  if (FileSystem::WriteStringToFile(csv_path.c_str(), csv_content, &error))
+  {
+    Host::AddOSDMessage(OSDMessageType::Info,
+      fmt::format("Training data saved: {} frames to {}", s_training_frame_count, s_training_data_dir));
+  }
+  else
+  {
+    Host::AddOSDMessage(OSDMessageType::Error, fmt::format("Failed to write labels: {}", error.GetDescription()));
+  }
+
+  INFO_LOG("Training data collection stopped. {} frames saved.", s_training_frame_count);
+  s_training_labels.clear();
+}
+
+u32 System::GetTrainingDataFrameCount()
+{
+  return s_training_frame_count;
+}
+
+void System::AddTrainingMemoryWatch(const std::string& name, u32 address, u8 size)
+{
+  // Validate size
+  if (size != 1 && size != 2 && size != 4)
+  {
+    WARNING_LOG("Invalid memory watch size {}, must be 1, 2, or 4", size);
+    return;
+  }
+
+  s_training_memory_watches.push_back({name, address, size});
+  INFO_LOG("Added training memory watch: {} @ 0x{:08X} ({}b)", name, address, size);
+}
+
+void System::ClearTrainingMemoryWatches()
+{
+  s_training_memory_watches.clear();
+  INFO_LOG("Cleared training memory watches");
+}
+
+void System::LoadTrainingMemoryWatchesFromFile(const std::string& path)
+{
+  // Load memory watches from a simple text file format:
+  // name,address,size
+  // lives,0x80068F58,2
+  // aku_aku,0x80068F5C,1
+
+  Error error;
+  auto file_data = FileSystem::ReadFileToString(path.c_str(), &error);
+  if (!file_data.has_value())
+  {
+    WARNING_LOG("Failed to load memory watches from {}: {}", path, error.GetDescription());
+    return;
+  }
+
+  s_training_memory_watches.clear();
+
+  std::istringstream stream(file_data.value());
+  std::string line;
+  int line_num = 0;
+
+  while (std::getline(stream, line))
+  {
+    line_num++;
+
+    // Skip empty lines and comments
+    if (line.empty() || line[0] == '#')
+      continue;
+
+    // Parse: name,address,size
+    size_t comma1 = line.find(',');
+    size_t comma2 = line.find(',', comma1 + 1);
+    if (comma1 == std::string::npos || comma2 == std::string::npos)
+    {
+      WARNING_LOG("Invalid format at line {}: {}", line_num, line);
+      continue;
+    }
+
+    std::string name = line.substr(0, comma1);
+    std::string addr_str = line.substr(comma1 + 1, comma2 - comma1 - 1);
+    std::string size_str = line.substr(comma2 + 1);
+
+    // Parse address (hex)
+    u32 address = 0;
+    if (addr_str.substr(0, 2) == "0x" || addr_str.substr(0, 2) == "0X")
+      address = static_cast<u32>(std::stoul(addr_str, nullptr, 16));
+    else
+      address = static_cast<u32>(std::stoul(addr_str, nullptr, 10));
+
+    u8 size = static_cast<u8>(std::stoul(size_str));
+
+    AddTrainingMemoryWatch(name, address, size);
+  }
+
+  INFO_LOG("Loaded {} memory watches from {}", s_training_memory_watches.size(), path);
 }
 
 bool System::InsertMedia(const char* path)

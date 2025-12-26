@@ -161,6 +161,10 @@ float AnalogController::GetBindState(u32 index) const
 
 void AnalogController::SetBindState(u32 index, float value)
 {
+  // Record input for behavioral cloning (only for digital buttons, not analog sticks)
+  if (index < static_cast<u32>(Button::Count) && index != static_cast<u32>(Button::Analog))
+    System::RecordControllerInput(m_index, index, value);
+
   if (index == static_cast<s32>(Button::Analog))
   {
     // analog toggle
