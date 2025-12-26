@@ -1,0 +1,88 @@
+# Crash Bandicoot 3 - Warp Room Jump & Spin Test
+# ================================================
+# 
+# Input format: frame:button or frame:button:release
+# 
+# Buttons:
+#   cross/x  = Jump (X button)
+#   square   = Spin Attack (□ button)  
+#   circle   = Special ability (○ button)
+#   triangle = Look around (△ button)
+#   start    = Pause/Menu
+#   select   = Select
+#   up/down/left/right = D-pad
+#   l1/l2/r1/r2 = Shoulder buttons
+
+# --- SKIP INTRO SCREENS (frames 0-7500) ---
+
+# Press Start to skip title
+300:start
+350:start:release
+
+# Skip Sony logo
+600:cross
+650:cross:release
+
+# Skip Universal logo
+1200:cross
+1250:cross:release
+
+# Skip Naughty Dog Box
+1500:start
+1550:start:release
+
+1700:start
+1750:start:release
+
+1800:start
+1850:start:release
+
+1900:start
+1950:start:release
+
+# Start New Game
+2200:cross
+2250:cross:release
+
+2300:cross
+2350:cross:release
+
+# Skip Story
+2400:triangle
+2450:triangle:release
+
+2500:triangle
+2550:triangle:release
+
+2600:triangle
+2650:triangle:release
+
+2700:triangle
+2750:triangle:release
+
+# --- WARP ROOM GAMEPLAY (frames 3000+) ---
+# Now we're in the Warp Room! Jump and spin!
+
+# Jump
+3000:cross
+3050:cross:release
+
+# Spin
+3100:square
+3150:square:release
+
+# Jump
+3200:cross
+3250:cross:release
+
+# Spin
+3300:square
+3350:square:release
+
+# Jump
+3400:cross
+3450:cross:release
+
+# Spin
+3500:square
+3550:square:release

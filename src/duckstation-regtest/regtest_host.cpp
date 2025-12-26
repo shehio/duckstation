@@ -42,10 +42,13 @@
 
 #include "fmt/format.h"
 
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <map>
+#include <vector>
 
 LOG_CHANNEL(Host);
 
@@ -84,6 +87,112 @@ static u32 s_frames_to_run = 60 * 60;
 static u32 s_frames_remaining = 0;
 static u32 s_frame_dump_interval = 0;
 static std::string s_dump_base_directory;
+
+// Input injection support
+struct ScheduledInput
+{
+  u32 frame;
+  u32 button_index;
+  float value; // 1.0 = press, 0.0 = release
+};
+static std::vector<ScheduledInput> s_scheduled_inputs;
+static size_t s_next_input_index = 0;
+
+// Button name to index mapping
+static std::optional<u32> GetButtonIndex(const std::string& name)
+{
+  static const std::map<std::string, u32> button_map = {
+    {"select", 0}, {"l3", 1}, {"r3", 2}, {"start", 3},
+    {"up", 4}, {"right", 5}, {"down", 6}, {"left", 7},
+    {"l2", 8}, {"r2", 9}, {"l1", 10}, {"r1", 11},
+    {"triangle", 12}, {"circle", 13}, {"cross", 14}, {"x", 14}, {"square", 15},
+    // Aliases
+    {"a", 14}, {"b", 13}, {"y", 12}, {"dpad_up", 4}, {"dpad_right", 5}, {"dpad_down", 6}, {"dpad_left", 7}
+  };
+
+  std::string lower_name = name;
+  std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+
+  auto it = button_map.find(lower_name);
+  if (it != button_map.end())
+    return it->second;
+  return std::nullopt;
+}
+
+// Parse input string like "100:Cross,150:Cross:release,200:Start"
+static bool ParseInputString(const std::string& input_str)
+{
+  s_scheduled_inputs.clear();
+
+  std::string remaining = input_str;
+  while (!remaining.empty())
+  {
+    // Find next comma
+    size_t comma_pos = remaining.find(',');
+    std::string token = (comma_pos != std::string::npos) ? remaining.substr(0, comma_pos) : remaining;
+    remaining = (comma_pos != std::string::npos) ? remaining.substr(comma_pos + 1) : "";
+
+    // Parse "frame:button" or "frame:button:release"
+    size_t colon1 = token.find(':');
+    if (colon1 == std::string::npos)
+    {
+      ERROR_LOG("Invalid input format: '{}' (expected frame:button)", token);
+      return false;
+    }
+
+    std::string frame_str = token.substr(0, colon1);
+    std::string rest = token.substr(colon1 + 1);
+
+    size_t colon2 = rest.find(':');
+    std::string button_name = (colon2 != std::string::npos) ? rest.substr(0, colon2) : rest;
+    std::string action = (colon2 != std::string::npos) ? rest.substr(colon2 + 1) : "press";
+
+    auto frame = StringUtil::FromChars<u32>(frame_str);
+    if (!frame.has_value())
+    {
+      ERROR_LOG("Invalid frame number: '{}'", frame_str);
+      return false;
+    }
+
+    auto button_index = GetButtonIndex(button_name);
+    if (!button_index.has_value())
+    {
+      ERROR_LOG("Unknown button: '{}'", button_name);
+      return false;
+    }
+
+    float value = (action == "release" || action == "r" || action == "0") ? 0.0f : 1.0f;
+
+    s_scheduled_inputs.push_back({frame.value(), button_index.value(), value});
+  }
+
+  // Sort by frame number
+  std::sort(s_scheduled_inputs.begin(), s_scheduled_inputs.end(),
+            [](const ScheduledInput& a, const ScheduledInput& b) { return a.frame < b.frame; });
+
+  INFO_LOG("Parsed {} scheduled inputs.", s_scheduled_inputs.size());
+  return true;
+}
+
+// Process inputs for current frame
+static void ProcessScheduledInputs(u32 current_frame)
+{
+  Controller* controller = System::GetController(0);
+  if (!controller)
+    return;
+
+  while (s_next_input_index < s_scheduled_inputs.size())
+  {
+    const ScheduledInput& input = s_scheduled_inputs[s_next_input_index];
+    if (input.frame > current_frame)
+      break;
+
+    controller->SetBindState(input.button_index, input.value);
+    DEV_LOG("Frame {}: {} button {} (index {})", current_frame,
+            input.value > 0.5f ? "Press" : "Release", input.button_index, input.button_index);
+    s_next_input_index++;
+  }
+}
 
 bool RegTestHost::SetFolders()
 {
@@ -358,6 +467,10 @@ void Host::OnMediaCaptureStopped()
 void Host::PumpMessagesOnCoreThread()
 {
   RegTestHost::ProcessCoreThreadEvents();
+
+  // Process scheduled inputs for current frame
+  const u32 current_frame = s_frames_to_run - s_frames_remaining;
+  ProcessScheduledInputs(current_frame);
 
   s_frames_remaining--;
   if (s_frames_remaining == 0)
@@ -828,6 +941,11 @@ void RegTestHost::PrintCommandLineHelp(const char* progname)
   std::fprintf(stderr, "  -pgxp-cpu: Forces PGXP CPU mode.\n");
   std::fprintf(stderr, "  -renderer <renderer>: Sets the graphics renderer. Default to software.\n");
   std::fprintf(stderr, "  -upscale <multiplier>: Enables upscaled rendering at the specified multiplier.\n");
+  std::fprintf(stderr, "  -input <inputs>: Schedule button inputs at specific frames.\n");
+  std::fprintf(stderr, "    Format: \"frame:button,frame:button:release,...\"\n");
+  std::fprintf(stderr, "    Buttons: cross/x, circle, square, triangle, start, select,\n");
+  std::fprintf(stderr, "             up, down, left, right, l1, l2, l3, r1, r2, r3\n");
+  std::fprintf(stderr, "    Example: -input \"100:start,200:start:release,300:cross\"\n");
   std::fprintf(stderr, "  --: Signals that no more arguments will follow and the remaining\n"
                        "    parameters make up the filename. Use when the filename contains\n"
                        "    spaces or starts with a dash.\n");
@@ -937,6 +1055,16 @@ bool RegTestHost::ParseCommandLineParameters(int argc, char* argv[], std::option
 
         INFO_LOG("Setting upscale to {}.", upscale);
         s_base_settings_interface.SetIntValue("GPU", "ResolutionScale", static_cast<s32>(upscale));
+        continue;
+      }
+      else if (CHECK_ARG_PARAM("-input"))
+      {
+        const std::string input_str = argv[++i];
+        if (!ParseInputString(input_str))
+        {
+          ERROR_LOG("Failed to parse input string: '{}'", input_str);
+          return false;
+        }
         continue;
       }
       else if (CHECK_ARG_PARAM("-cpu"))
@@ -1090,6 +1218,10 @@ int main(int argc, char* argv[])
 
   INFO_LOG("Running for {} frames...", s_frames_to_run);
   s_frames_remaining = s_frames_to_run;
+  s_next_input_index = 0;
+
+  if (!s_scheduled_inputs.empty())
+    INFO_LOG("Processing {} scheduled inputs.", s_scheduled_inputs.size());
 
   {
     const Timer::Value start_time = Timer::GetCurrentValue();
