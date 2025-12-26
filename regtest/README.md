@@ -50,6 +50,26 @@ export DUCKSTATION_BIOS_DIR="/path/to/your/bios"
 | `-dumpinterval <N>` | Save a screenshot every N frames |
 | `-upscale <mult>` | Resolution multiplier (e.g., 2 for 2x) |
 | `-pgxp` | Enable PGXP geometry correction |
+| `-input <inputs>` | Schedule button inputs at specific frames (see below) |
+
+### Input Injection
+
+The `-input` option allows you to schedule button presses at specific frames for automated testing and input replay.
+
+**Format:** `frame:button,frame:button:release,...`
+
+**Supported buttons:** `cross`/`x`, `circle`, `square`, `triangle`, `start`, `select`, `up`, `down`, `left`, `right`, `l1`, `l2`, `l3`, `r1`, `r2`, `r3`
+
+**Example:**
+```bash
+./build/bin/duckstation-regtest -console -frames 500 \
+  -input "100:start,200:start:release,300:cross" game.cue
+```
+
+This will:
+- Press Start at frame 100
+- Release Start at frame 200
+- Press Cross at frame 300
 
 ### Examples
 
@@ -68,6 +88,12 @@ export DUCKSTATION_BIOS_DIR="/path/to/your/bios"
 ```bash
 ./build/bin/duckstation-regtest -console -frames 500 \
   -renderer Software -upscale 2 game.cue
+```
+
+**Automate menu navigation (press Start, wait, press Cross):**
+```bash
+./build/bin/duckstation-regtest -console -frames 1000 \
+  -input "300:start,350:start:release,500:cross,550:cross:release" game.cue
 ```
 
 ## Environment Variables
