@@ -125,16 +125,54 @@ RAM dumps capture the full 2MB PlayStation memory, which contains:
 
 ### Analyzing RAM Dumps
 
+#### Using the Python Script (Recommended)
+
+We provide a Python script for easy RAM analysis:
+
 ```bash
-# View as hex
+cd ~/Library/Application\ Support/DuckStation/input_recording_*/
+
+# Basic info about a dump
+python3 scripts/input-recording/read_ram_dump.py ram_00012034.bin
+
+# Read known Crash 3 addresses (lives, wumpa, crystals)
+python3 scripts/input-recording/read_ram_dump.py ram_00012034.bin --game crash3
+
+# Read a specific memory address
+python3 scripts/input-recording/read_ram_dump.py ram_00012034.bin --address 0x80068F58 --size 1
+
+# Show hex dump at an address
+python3 scripts/input-recording/read_ram_dump.py ram_00012034.bin --address 0x80068F58 --hex
+
+# Compare two dumps to find what changed (great for finding addresses!)
+python3 scripts/input-recording/read_ram_dump.py ram_00012034.bin ram_00014854.bin --diff
+```
+
+#### Using Command Line (xxd)
+
+```bash
+# View first 50 lines as hex
 xxd ram_00001000.bin | head -50
 
-# Search for specific values (e.g., lives = 3)
-xxd ram_00001000.bin | grep "03 00"
+# Read at specific offset (0x68F58 = address 0x80068F58)
+xxd -s 0x68F58 -l 16 ram_00012034.bin
 
-# Compare two dumps to find what changed
-diff <(xxd ram_00001000.bin) <(xxd ram_00002000.bin)
+# Compare two dumps
+diff <(xxd ram_00001000.bin) <(xxd ram_00002000.bin) | head -50
 ```
+
+### Finding Game-Specific Memory Addresses
+
+To find addresses for lives, score, position, etc.:
+
+1. **Record RAM at frame X** (e.g., when you have 3 lives)
+2. **Change the value in-game** (e.g., lose a life → 2 lives)
+3. **Record RAM at frame Y**
+4. **Compare the dumps:**
+   ```bash
+   python3 read_ram_dump.py ram_frameX.bin ram_frameY.bin --diff
+   ```
+5. **Look for addresses that changed from 3 → 2**
 
 ### Common Memory Addresses (Crash Bandicoot 3)
 
@@ -144,7 +182,7 @@ diff <(xxd ram_00001000.bin) <(xxd ram_00002000.bin)
 | `0x80068F5C` | 2 bytes | Wumpa fruits |
 | `0x80068F60` | 4 bytes | Crystals collected |
 
-*Note: Addresses vary by game and region. Use memory scanners to find them.*
+*Note: Addresses vary by game and region. Use the diff method above to find them.*
 
 ## Recording Format
 
