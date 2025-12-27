@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: CC-BY-NC-ND-4.0
 
 #include "opengl_context_agl.h"
+#include "gpu_texture.h"
 
 #include "common/assert.h"
 #include "common/error.h"
@@ -213,7 +214,7 @@ void OpenGLContextAGL::BindContextToView(WindowInfo& wi, NSOpenGLContext* contex
   wi.surface_width = static_cast<u32>(static_cast<CGFloat>(window_size.width) * window_scale);
   wi.surface_height = static_cast<u32>(static_cast<CGFloat>(window_size.height) * window_scale);
   wi.surface_scale = window_scale;
-  wi.surface_format = GPUTexture::Format::RGBA8;
+  wi.surface_format = GPUTextureFormat::RGBA8;
 }
 
 void OpenGLContextAGL::UpdateSurfaceSize(WindowInfo& wi, NSOpenGLContext* context)

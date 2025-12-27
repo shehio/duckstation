@@ -59,6 +59,9 @@ void DigitalController::SetBindState(u32 index, float value)
   if (index >= static_cast<u32>(Button::Count))
     return;
 
+  // Record input for behavioral cloning
+  System::RecordControllerInput(m_index, index, value);
+
   const bool pressed = (value >= 0.5f);
   const u16 bit = u16(1) << static_cast<u8>(index);
   if (pressed)

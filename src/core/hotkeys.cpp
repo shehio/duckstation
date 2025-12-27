@@ -25,6 +25,7 @@
 
 #include "common/error.h"
 #include "common/file_system.h"
+#include "common/path.h"
 #include "common/timer.h"
 
 #include "IconsEmoji.h"
@@ -222,6 +223,52 @@ DEFINE_NON_ANDROID_HOTKEY("ToggleMediaCapture", TRANSLATE_NOOP("Hotkeys", "Syste
                                 System::StopMediaCapture();
                               else
                                 System::StartMediaCapture();
+                            }
+                          })
+
+DEFINE_NON_ANDROID_HOTKEY("ToggleInputRecording", TRANSLATE_NOOP("Hotkeys", "System"),
+                          TRANSLATE_NOOP("Hotkeys", "Toggle Input Recording"), [](s32 pressed) {
+                            if (!pressed)
+                            {
+                              if (System::IsRecordingInput())
+                                System::StopInputRecording();
+                              else
+                                System::StartInputRecording();
+                            }
+                          })
+
+DEFINE_NON_ANDROID_HOTKEY("SaveInputRecording", TRANSLATE_NOOP("Hotkeys", "System"),
+                          TRANSLATE_NOOP("Hotkeys", "Save Input Recording"), [](s32 pressed) {
+                            if (!pressed && !System::IsRecordingInput())
+                            {
+                              const std::string path = Path::Combine(
+                                EmuFolders::DataRoot,
+                                fmt::format("input_recording_{}.txt", System::GetFrameNumber()));
+                              Error error;
+                              if (System::SaveInputRecording(path, &error))
+                                Host::AddIconOSDMessage(OSDMessageType::Info, "InputRecording", ICON_FA_FLOPPY_DISK,
+                                  fmt::format("Input recording saved to {}", path));
+                              else
+                                Host::AddIconOSDMessage(OSDMessageType::Error, "InputRecording", ICON_FA_FLOPPY_DISK,
+                                  fmt::format("Failed to save: {}", error.GetDescription()));
+                            }
+                          })
+
+DEFINE_NON_ANDROID_HOTKEY("ToggleTrainingDataCollection", TRANSLATE_NOOP("Hotkeys", "System"),
+                          TRANSLATE_NOOP("Hotkeys", "Toggle AI Training Data Collection"), [](s32 pressed) {
+                            if (!pressed)
+                            {
+                              if (System::IsCollectingTrainingData())
+                              {
+                                System::StopTrainingDataCollection();
+                              }
+                              else
+                              {
+                                const std::string dir = Path::Combine(
+                                  EmuFolders::DataRoot,
+                                  fmt::format("training_data_{}", std::time(nullptr)));
+                                System::StartTrainingDataCollection(dir, 1); // Every frame
+                              }
                             }
                           })
 

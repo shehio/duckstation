@@ -331,6 +331,29 @@ bool DumpVRAM(std::string path, Error* error);
 /// Dumps sound RAM to a file.
 bool DumpSPURAM(std::string path, Error* error);
 
+/// Input recording for behavioral cloning
+bool IsRecordingInput();
+void StartInputRecording();
+void StopInputRecording();
+void RecordControllerInput(u32 controller_index, u32 button_index, float value);
+bool SaveInputRecording(const std::string& path, Error* error);
+std::string GetInputRecordingAsRegtestFormat();
+void ClearInputRecording();
+
+/// Training data collection for AI/ML
+bool IsCollectingTrainingData();
+void StartTrainingDataCollection(const std::string& output_dir, u32 frame_interval = 1);
+void StopTrainingDataCollection();
+u32 GetTrainingDataFrameCount();
+
+/// Configure memory addresses to watch during training data collection
+/// Call before StartTrainingDataCollection() to customize what memory values are recorded
+/// address: PS1 address (e.g., 0x80068F58 for lives in Crash 3)
+/// size: 1, 2, or 4 bytes
+void AddTrainingMemoryWatch(const std::string& name, u32 address, u8 size);
+void ClearTrainingMemoryWatches();
+void LoadTrainingMemoryWatchesFromFile(const std::string& path);
+
 bool InsertMedia(const char* path);
 void RemoveMedia();
 
