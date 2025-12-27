@@ -12,20 +12,40 @@ Input recording captures every button press and release with the exact frame num
 
 ## Building DuckStation with Input Recording
 
-The input recording feature requires building DuckStation from source with the feature enabled.
+The input recording feature requires building DuckStation from source. 
 
-### macOS (Apple Silicon)
+### ⚠️ Qt Version Requirement
+
+**Important:** DuckStation requires Qt 6.10.1+ which is newer than what's available via Homebrew (6.9.3 as of Dec 2024). 
+
+**Options:**
+
+1. **Use the regtest binary** (Recommended for headless replay)
+   - Build with: `cd regtest && ./build-regtest.sh`
+   - Works with system libraries, no Qt needed
+   - See `regtest/README.md` for usage
+
+2. **Download official DuckStation release**
+   - Get from: https://github.com/stenzek/duckstation/releases
+   - Note: Won't have custom input recording feature
+
+3. **Build Qt 6.10.1 from source** (Advanced)
+   - Download from qt.io
+   - Build and install to `deps-local/`
+   - Then build DuckStation
+
+### macOS (Apple Silicon) - If Qt 6.10.1+ Available
 
 ```bash
-# Clone and build
 cd /path/to/duckstation
 
-# Build the GUI app
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja
+# Build script (checks Qt version)
+./scripts/input-recording/build-duckstation-gui.sh
+
+# Or manually:
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_QT_FRONTEND=ON -G Ninja
 ninja
-cd ..
 
 # The app will be at: build/bin/DuckStation.app
 ```
