@@ -237,20 +237,59 @@ DEFINE_NON_ANDROID_HOTKEY("ToggleInputRecording", TRANSLATE_NOOP("Hotkeys", "Sys
                             }
                           })
 
+DEFINE_NON_ANDROID_HOTKEY("ToggleInputRecordingWithScreenshots", TRANSLATE_NOOP("Hotkeys", "System"),
+                          TRANSLATE_NOOP("Hotkeys", "Toggle Input Recording with Screenshots (every 60 frames)"), [](s32 pressed) {
+                            if (!pressed)
+                            {
+                              if (System::IsRecordingInput())
+                              {
+                                System::StopInputRecording();
+                              }
+                              else
+                              {
+                                System::InputRecordingOptions opts;
+                                opts.screenshot_interval = 60; // ~1 second at 60fps
+                                opts.dump_ram = true;          // Dump RAM on save
+                                System::StartInputRecording(opts);
+                              }
+                            }
+                          })
+
+DEFINE_NON_ANDROID_HOTKEY("ToggleInputRecordingFull", TRANSLATE_NOOP("Hotkeys", "System"),
+                          TRANSLATE_NOOP("Hotkeys", "Toggle Full Input Recording (screenshots + RAM every 60 frames)"), [](s32 pressed) {
+                            if (!pressed)
+                            {
+                              if (System::IsRecordingInput())
+                              {
+                                System::StopInputRecording();
+                              }
+                              else
+                              {
+                                System::InputRecordingOptions opts;
+                                opts.screenshot_interval = 60;   // ~1 second at 60fps
+                                opts.dump_ram = true;            // Dump RAM on save
+                                opts.dump_ram_per_frame = true;  // Also dump RAM every interval
+                                System::StartInputRecording(opts);
+                              }
+                            }
+                          })
+
 DEFINE_NON_ANDROID_HOTKEY("SaveInputRecording", TRANSLATE_NOOP("Hotkeys", "System"),
                           TRANSLATE_NOOP("Hotkeys", "Save Input Recording"), [](s32 pressed) {
                             if (!pressed && !System::IsRecordingInput())
                             {
-                              const std::string path = Path::Combine(
-                                EmuFolders::DataRoot,
-                                fmt::format("input_recording_{}.txt", System::GetFrameNumber()));
                               Error error;
-                              if (System::SaveInputRecording(path, &error))
+                              if (System::SaveInputRecording(&error))
+                              {
+                                const auto& opts = System::GetInputRecordingOptions();
                                 Host::AddIconOSDMessage(OSDMessageType::Info, "InputRecording", ICON_FA_FLOPPY_DISK,
-                                  fmt::format("Input recording saved to {}", path));
+                                  fmt::format("Input recording saved to {}", opts.output_dir));
+                              }
                               else
+                              {
                                 Host::AddIconOSDMessage(OSDMessageType::Error, "InputRecording", ICON_FA_FLOPPY_DISK,
                                   fmt::format("Failed to save: {}", error.GetDescription()));
+                              }
                             }
                           })
 
