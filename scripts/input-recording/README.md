@@ -9,6 +9,8 @@ Input recording captures every button press and release with the exact frame num
 - **Create training data** for AI/ML models (behavioral cloning)
 - **Automate testing** by recording once, replaying many times
 - **Share input sequences** with others
+- **Capture screenshots** at preset intervals during recording
+- **Dump RAM** to analyze game state (lives, score, position, etc.)
 
 ## Building DuckStation with Input Recording
 
@@ -57,7 +59,9 @@ ninja
 1. Open **DuckStation** (GUI app)
 2. Go to **Settings → Hotkeys → System**
 3. Bind keys for:
-   - **Toggle Input Recording** → e.g., `F5`
+   - **Toggle Input Recording** → e.g., `F5` (basic recording)
+   - **Toggle Input Recording with Screenshots** → e.g., `F7` (captures screenshots every 60 frames + RAM dump on save)
+   - **Toggle Full Input Recording** → e.g., `F8` (screenshots + RAM dumps every 60 frames)
    - **Save Input Recording** → e.g., `F6`
 
 ### Step 2: Record Your Gameplay
@@ -86,6 +90,61 @@ ls ~/.local/share/duckstation/input_recording_*.txt
 # Windows
 dir %APPDATA%\DuckStation\input_recording_*.txt
 ```
+
+## Recording Modes
+
+### Basic Recording (Toggle Input Recording)
+- Records only button inputs
+- Lightweight, minimal disk usage
+- Output: `input_recording_XXXXX.txt`
+
+### Recording with Screenshots (Toggle Input Recording with Screenshots)
+- Records button inputs
+- Captures screenshots every 60 frames (~1 second)
+- Dumps full RAM when you save
+- Output directory: `input_recording_TIMESTAMP/`
+  - `input_recording_XXXXX.txt` - inputs
+  - `frame_00000XXX.png` - screenshots
+  - `input_recording_XXXXX.ram.bin` - 2MB RAM dump
+
+### Full Recording (Toggle Full Input Recording)
+- Records button inputs
+- Captures screenshots every 60 frames
+- Dumps RAM every 60 frames (for state analysis)
+- Output directory: `input_recording_TIMESTAMP/`
+  - `input_recording_XXXXX.txt` - inputs
+  - `frame_00000XXX.png` - screenshots
+  - `ram_00000XXX.bin` - RAM dump per interval
+
+## RAM Dumps
+
+RAM dumps capture the full 2MB PlayStation memory, which contains:
+- **Game variables**: lives, health, score, position
+- **Object states**: enemy positions, collectibles
+- **Level data**: current level, progress
+
+### Analyzing RAM Dumps
+
+```bash
+# View as hex
+xxd ram_00001000.bin | head -50
+
+# Search for specific values (e.g., lives = 3)
+xxd ram_00001000.bin | grep "03 00"
+
+# Compare two dumps to find what changed
+diff <(xxd ram_00001000.bin) <(xxd ram_00002000.bin)
+```
+
+### Common Memory Addresses (Crash Bandicoot 3)
+
+| Address | Size | Description |
+|---------|------|-------------|
+| `0x80068F58` | 1 byte | Lives |
+| `0x80068F5C` | 2 bytes | Wumpa fruits |
+| `0x80068F60` | 4 bytes | Crystals collected |
+
+*Note: Addresses vary by game and region. Use memory scanners to find them.*
 
 ## Recording Format
 
