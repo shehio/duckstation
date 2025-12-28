@@ -16,7 +16,7 @@ Input recording captures every button press and release with the exact frame num
 
 The input recording feature requires building DuckStation from source. 
 
-### ⚠️ Qt Version Requirement
+### Qt Version Requirement
 
 **Important:** DuckStation requires Qt 6.10.1+ which is newer than what's available via Homebrew (6.9.3 as of Dec 2024). 
 
