@@ -111,6 +111,7 @@ LOG_CHANNEL(System);
 
 // Forward declaration for training data collection (defined later, used in FrameDone)
 static void ProcessTrainingDataCollection();
+static void ProcessInputRecordingFrame();
 
 SystemBootParameters::SystemBootParameters() = default;
 
@@ -2185,6 +2186,9 @@ void System::FrameDone()
   // Process training data collection for AI/ML
   ProcessTrainingDataCollection();
 
+  // Process input recording screenshots and RAM dumps
+  ProcessInputRecordingFrame();
+
   // Generate any pending samples from the SPU before sleeping, this way we reduce the chances of underruns.
   // TODO: when running ahead, we can skip this (and the flush above)
   if (!IsReplayingGPUDump()) [[likely]]
@@ -4165,6 +4169,9 @@ struct RecordedInput
 static std::vector<RecordedInput> s_recorded_inputs;
 static bool s_recording_input = false;
 static std::map<std::pair<u32, u32>, float> s_last_input_state; // Track last state to avoid duplicates
+static System::InputRecordingOptions s_recording_options;
+static u32 s_recording_start_frame = 0;
+static u32 s_last_screenshot_frame = 0;
 } // namespace
 
 bool System::IsRecordingInput()
@@ -4172,16 +4179,50 @@ bool System::IsRecordingInput()
   return s_recording_input;
 }
 
-void System::StartInputRecording()
+const System::InputRecordingOptions& System::GetInputRecordingOptions()
+{
+  return s_recording_options;
+}
+
+void System::StartInputRecording(const InputRecordingOptions& options)
 {
   if (!IsValid())
     return;
 
   s_recorded_inputs.clear();
   s_last_input_state.clear();
+  s_recording_options = options;
+  s_recording_start_frame = GetFrameNumber();
+  s_last_screenshot_frame = 0;
   s_recording_input = true;
-  Host::AddOSDMessage(OSDMessageType::Info, "Input recording started");
-  INFO_LOG("Input recording started at frame {}", GetFrameNumber());
+
+  // Set defaults if not specified
+  if (s_recording_options.output_dir.empty())
+    s_recording_options.output_dir = EmuFolders::DataRoot;
+  if (s_recording_options.base_filename.empty())
+    s_recording_options.base_filename = "input_recording";
+
+  // Create output directory if screenshots or RAM dumps are enabled
+  if (s_recording_options.screenshot_interval > 0 || s_recording_options.dump_ram_per_frame)
+  {
+    const std::string session_dir = Path::Combine(s_recording_options.output_dir,
+      fmt::format("{}_{}", s_recording_options.base_filename, std::time(nullptr)));
+    FileSystem::EnsureDirectoryExists(session_dir.c_str(), false);
+    s_recording_options.output_dir = session_dir;
+  }
+
+  std::string msg = "Input recording started";
+  if (s_recording_options.screenshot_interval > 0)
+    msg += fmt::format(" (screenshots every {} frames)", s_recording_options.screenshot_interval);
+  if (s_recording_options.dump_ram)
+    msg += " (RAM dump on save)";
+  if (s_recording_options.dump_ram_per_frame)
+    msg += " (RAM dumps per interval)";
+
+  Host::AddOSDMessage(OSDMessageType::Info, msg);
+  INFO_LOG("Input recording started at frame {} with options: output_dir={}, screenshot_interval={}, dump_ram={}, dump_ram_per_frame={}",
+           GetFrameNumber(), s_recording_options.output_dir, s_recording_options.screenshot_interval,
+           s_recording_options.dump_ram, s_recording_options.dump_ram_per_frame);
 }
 
 void System::StopInputRecording()
@@ -4193,6 +4234,41 @@ void System::StopInputRecording()
   Host::AddOSDMessage(OSDMessageType::Info,
     fmt::format("Input recording stopped. {} inputs recorded.", s_recorded_inputs.size()));
   INFO_LOG("Input recording stopped. {} inputs recorded.", s_recorded_inputs.size());
+}
+
+// Helper function to process periodic screenshots and RAM dumps during recording
+static void ProcessInputRecordingFrame()
+{
+  if (!s_recording_input)
+    return;
+
+  const u32 current_frame = System::GetFrameNumber();
+  const u32 relative_frame = current_frame - s_recording_start_frame;
+
+  // Check if we should take a screenshot
+  if (s_recording_options.screenshot_interval > 0 &&
+      relative_frame > 0 &&
+      relative_frame % s_recording_options.screenshot_interval == 0 &&
+      current_frame != s_last_screenshot_frame)
+  {
+    s_last_screenshot_frame = current_frame;
+
+    // Save screenshot
+    const std::string screenshot_path = Path::Combine(s_recording_options.output_dir,
+      fmt::format("frame_{:08d}.png", current_frame));
+    GPUBackend::RenderScreenshotToFile(screenshot_path.c_str(), DisplayScreenshotMode::InternalResolution, 85, false);
+
+    // Save RAM dump if per-frame dumps are enabled
+    if (s_recording_options.dump_ram_per_frame)
+    {
+      const std::string ram_path = Path::Combine(s_recording_options.output_dir,
+        fmt::format("ram_{:08d}.bin", current_frame));
+      Error error;
+      System::DumpRAMToFile(ram_path, &error);
+    }
+
+    DEV_LOG("Recording: saved screenshot at frame {}", current_frame);
+  }
 }
 
 void System::RecordControllerInput(u32 controller_index, u32 button_index, float value)
@@ -4232,7 +4308,87 @@ bool System::SaveInputRecording(const std::string& path, Error* error)
     return false;
   }
 
+  // If RAM dump is enabled, save it alongside the recording
+  if (s_recording_options.dump_ram && !s_recording_options.dump_ram_per_frame)
+  {
+    const std::string ram_path = Path::ReplaceExtension(path, "ram.bin");
+    Error ram_error;
+    if (!DumpRAMToFile(ram_path, &ram_error))
+    {
+      WARNING_LOG("Failed to dump RAM alongside recording: {}", ram_error.GetDescription());
+    }
+    else
+    {
+      INFO_LOG("RAM dump saved to: {}", ram_path);
+    }
+  }
+
   return FileSystem::WriteStringToFile(path.c_str(), data, error);
+}
+
+bool System::SaveInputRecording(Error* error)
+{
+  const std::string path = Path::Combine(s_recording_options.output_dir,
+    fmt::format("{}_{}.txt", s_recording_options.base_filename, GetFrameNumber()));
+  return SaveInputRecording(path, error);
+}
+
+bool System::DumpRAMToFile(const std::string& path, Error* error)
+{
+  if (!IsValid())
+  {
+    Error::SetStringView(error, "System is not running.");
+    return false;
+  }
+
+  // PS1 has 2MB of RAM (can be extended to 8MB)
+  const u32 ram_size = Bus::g_ram_size;
+
+  auto fp = FileSystem::OpenManagedCFile(path.c_str(), "wb", error);
+  if (!fp)
+    return false;
+
+  if (std::fwrite(Bus::g_ram, 1, ram_size, fp.get()) != ram_size)
+  {
+    Error::SetErrno(error, "Failed to write RAM data", errno);
+    return false;
+  }
+
+  INFO_LOG("Dumped {} bytes of RAM to: {}", ram_size, path);
+  return true;
+}
+
+bool System::DumpRAMRegionToFile(const std::string& path, u32 start_address, u32 size, Error* error)
+{
+  if (!IsValid())
+  {
+    Error::SetStringView(error, "System is not running.");
+    return false;
+  }
+
+  // Validate address range
+  const u32 ram_size = Bus::g_ram_size;
+  const u32 masked_start = start_address & Bus::g_ram_mask;
+
+  if (masked_start + size > ram_size)
+  {
+    Error::SetStringFmt(error, "Address range 0x{:08X}-0x{:08X} exceeds RAM size ({})",
+                        start_address, start_address + size, ram_size);
+    return false;
+  }
+
+  auto fp = FileSystem::OpenManagedCFile(path.c_str(), "wb", error);
+  if (!fp)
+    return false;
+
+  if (std::fwrite(&Bus::g_ram[masked_start], 1, size, fp.get()) != size)
+  {
+    Error::SetErrno(error, "Failed to write RAM data", errno);
+    return false;
+  }
+
+  INFO_LOG("Dumped {} bytes of RAM (0x{:08X}-0x{:08X}) to: {}", size, start_address, start_address + size, path);
+  return true;
 }
 
 std::string System::GetInputRecordingAsRegtestFormat()

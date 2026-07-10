@@ -332,13 +332,28 @@ bool DumpVRAM(std::string path, Error* error);
 bool DumpSPURAM(std::string path, Error* error);
 
 /// Input recording for behavioral cloning
+struct InputRecordingOptions
+{
+  std::string output_dir;           // Directory to save recordings (default: DataRoot)
+  std::string base_filename;        // Base filename for recordings (default: "input_recording")
+  u32 screenshot_interval = 0;      // Frames between screenshots (0 = disabled)
+  bool dump_ram = false;            // Whether to dump full RAM on save
+  bool dump_ram_per_frame = false;  // Whether to dump RAM every screenshot_interval frames
+};
+
 bool IsRecordingInput();
-void StartInputRecording();
+void StartInputRecording(const InputRecordingOptions& options = {});
 void StopInputRecording();
 void RecordControllerInput(u32 controller_index, u32 button_index, float value);
 bool SaveInputRecording(const std::string& path, Error* error);
+bool SaveInputRecording(Error* error); // Uses configured output path
 std::string GetInputRecordingAsRegtestFormat();
 void ClearInputRecording();
+const InputRecordingOptions& GetInputRecordingOptions();
+
+/// RAM dumping utilities
+bool DumpRAMToFile(const std::string& path, Error* error);
+bool DumpRAMRegionToFile(const std::string& path, u32 start_address, u32 size, Error* error);
 
 /// Training data collection for AI/ML
 bool IsCollectingTrainingData();
